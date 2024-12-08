@@ -1,196 +1,450 @@
-import ImageKit from "imagekit";
-import Post from "../models/post.model.js";
-import User from "../models/user.model.js";
+import { Post } from '../models/post.model.js'
+import { createResponse } from "../utils/responseModel.js";
+import { paginate } from "../utils/pagination.js";
+import { config } from "../config/index.js";
 
-export const getPosts = async (req, res) => {
-  const page = parseInt(req.query.page) || 1;
-  const limit = parseInt(req.query.limit) || 2;
+const POSTS_URL = config.server.apiURL + "/posts";
 
-  const query = {};
+/**
+ * Fetches all posts with pagination.
+ * @param {Object} req - The Express request object.
+ * @param {Object} res - The Express response object to send back the response.
+ * @returns {void}
+ */
+export const getAllPosts = async (req, res) => {
+    const { page = 1, limit = 10 } = req.query;
+    try {
+        const skip = (page - 1) * limit;
+        const totalPosts = await Post.countDocuments();
 
-  console.log(req.query);
+        const posts = await Post.find().skip(skip).limit(limit);
+        const currentTotal = posts.length;
 
-  const cat = req.query.cat;
-  const author = req.query.author;
-  const searchQuery = req.query.search;
-  const sortQuery = req.query.sort;
-  const featured = req.query.featured;
+        // Handle pagination and validation in one step
+        const pagination = paginate(totalPosts, currentTotal, page, limit, POSTS_URL);
 
-  if (cat) {
-    query.category = cat;
-  }
+        // If pagination returns an error (invalid page), return the error response
+        if (pagination.error) {
+            return res.status(pagination.status).json(createResponse(
+                false,
+                pagination.status,
+                pagination.message,
+                { totalPages: pagination.totalPages }
+            ));
+        }
 
-  if (searchQuery) {
-    query.title = { $regex: searchQuery, $options: "i" };
-  }
-
-  if (author) {
-    const user = await User.findOne({ username: author }).select("_id");
-
-    if (!user) {
-      return res.status(404).json("No post found!");
-    }
-
-    query.user = user._id;
-  }
-
-  let sortObj = { createdAt: -1 };
-
-  if (sortQuery) {
-    switch (sortQuery) {
-      case "newest":
-        sortObj = { createdAt: -1 };
-        break;
-      case "oldest":
-        sortObj = { createdAt: 1 };
-        break;
-      case "popular":
-        sortObj = { visit: -1 };
-        break;
-      case "trending":
-        sortObj = { visit: -1 };
-        query.createdAt = {
-          $gte: new Date(new Date().getTime() - 7 * 24 * 60 * 60 * 1000),
+        const response = {
+            ...pagination,
+            posts,
         };
-        break;
-      default:
-        break;
+
+        return res.status(200).json(createResponse(
+            true,
+            200,
+            "All posts fetched successfully",
+            response
+        ));
+    } catch (error) {
+        console.error(error.message);
+        return res.status(500).json(createResponse(false, 500, "Internal server error"));
     }
-  }
-
-  if (featured) {
-    query.isFeatured = true;
-  }
-
-  const posts = await Post.find(query)
-    .populate("user", "username")
-    .sort(sortObj)
-    .limit(limit)
-    .skip((page - 1) * limit);
-
-  const totalPosts = await Post.countDocuments();
-  const hasMore = page * limit < totalPosts;
-
-  res.status(200).json({ posts, hasMore });
 };
 
-export const getPost = async (req, res) => {
-  const post = await Post.findOne({ slug: req.params.slug }).populate(
-    "user",
-    "username img"
-  );
-  res.status(200).json(post);
+
+/**
+ * Fetches the most recent active news posts.
+ * @param {Object} req - The Express request object.
+ * @param {Object} res - The Express response object to send back the response.
+ * @returns {void}
+ */
+export const getRecentPosts = async (req, res) => {
+    const { page = 1, limit = 6 } = req.query; // Default limit is 6 if not provided
+    try {
+        // Calculate skip value based on the page and limit
+        const skip = (page - 1) * limit;
+
+        // Count the total number of published posts
+        const totalNews = await Post.countDocuments({ status: 'PUBLISHED' });
+
+        // Fetch the paginated news items
+        const news = await Post.find({ status: 'PUBLISHED' })
+            .sort({ createdAt: -1 })
+            .skip(skip)
+            .limit(limit);
+
+        const currentTotal = news.length;
+
+        // Handle pagination and validation in one step
+        const pagination = paginate(totalNews, currentTotal, page, limit, POSTS_URL + "/recent");
+
+        // If pagination returns an error (invalid page), return the error response
+        if (pagination.error) {
+            return res.status(pagination.status).json(createResponse(
+                false,
+                pagination.status,
+                pagination.message,
+                { totalPages: pagination.totalPages }
+            ));
+        }
+
+        const response = {
+            ...pagination,
+            news,
+        };
+
+        return res.status(200).json(createResponse(
+            true,
+            200,
+            "Recent news fetched successfully",
+            response
+        ));
+    } catch (error) {
+        console.error(error.message);
+        return res.status(500).json(createResponse(false, 500, "Internal server error"));
+    }
 };
 
-export const createPost = async (req, res) => {
-  // print the request body
-  console.log(req.body);
-  
-  const clerkUserId = req.auth.userId;
 
-  console.log(`clerkUserId: ${clerkUserId}`);
+/**
+ * Searches news posts based on a search value with pagination.
+ * @param {Object} req - The Express request object containing search value in query.
+ * @param {Object} res - The Express response object to send back the response.
+ * @returns {void}
+ */
+export const searchNews = async (req, res) => {
+    const { q, page = 1, limit = 10 } = req.query; // Default page = 1, limit = 10
+    try {
+        // Check if search value is provided
+        if (!q) {
+            return res.status(400).json(createResponse(
+                false,
+                400,
+                "Search value is required"
+            ));
+        }
 
-  // console.log(req.headers);
+        // Calculate skip value based on page and limit
+        const skip = (page - 1) * limit;
 
-  if (!clerkUserId) {
-    return res.status(401).json("Not authenticated!");
-  }
+        // Count the total number of published posts that match the search query
+        const totalNews = await Post.countDocuments({
+            status: 'PUBLISHED',
+            $text: { $search: q }
+        });
 
-  const user = await User.findOne({ clerkUserId });
+        // Fetch the paginated search results
+        const news = await Post.find({
+            status: 'PUBLISHED',
+            $text: { $search: q }
+        })
+            .skip(skip)
+            .limit(limit);
 
-  if (!user) {
-    return res.status(404).json("User not found!");
-  }
+        const currentTotal = news.length;
 
-  let slug = req.body.title.replace(/ /g, "-").toLowerCase(); // example: "Hello World" => "hello-world"
+        // Handle pagination and validation in one step
+        const pagination = paginate(totalNews, currentTotal, page, limit, POSTS_URL + "/search?q=" + q);
 
-  let existingPost = await Post.findOne({ slug });
+        // If pagination returns an error (invalid page), return the error response
+        if (pagination.error) {
+            return res.status(pagination.status).json(createResponse(
+                false,
+                pagination.status,
+                pagination.message,
+                { totalPages: pagination.totalPages }
+            ));
+        }
 
-  let counter = 2;
+        const response = {
+            ...pagination,
+            news,
+        };
 
-  while (existingPost) {
-    slug = `${slug}-${counter}`;
-    existingPost = await Post.findOne({ slug });
-    counter++;
-  }
-
-  const newPost = new Post({ user: user._id, slug, ...req.body });
-
-  const post = await newPost.save();
-  res.status(200).json(post);
+        return res.status(200).json(createResponse(
+            true,
+            200,
+            "News search results",
+            response
+        ));
+    } catch (error) {
+        console.error(error.message);
+        return res.status(500).json(createResponse(false, 500, "Internal server error"));
+    }
 };
 
-export const deletePost = async (req, res) => {
-  const clerkUserId = req.auth.userId;
-
-  if (!clerkUserId) {
-    return res.status(401).json("Not authenticated!");
-  }
-
-  const role = req.auth.sessionClaims?.metadata?.role || "user";
-
-  if (role === "admin") {
-    await Post.findByIdAndDelete(req.params.id);
-    return res.status(200).json("Post has been deleted");
-  }
-
-  const user = await User.findOne({ clerkUserId });
-
-  const deletedPost = await Post.findOneAndDelete({
-    _id: req.params.id,
-    user: user._id,
-  });
-
-  if (!deletedPost) {
-    return res.status(403).json("You can delete only your posts!");
-  }
-
-  res.status(200).json("Post has been deleted");
+/**
+ * Fetches the list of categories with their news count.
+ * @param {Object} req - The Express request object.
+ * @param {Object} res - The Express response object to send back the response.
+ * @returns {void}
+ */
+export const getCategories = async (req, res) => {
+    try {
+        const categories = await Post.aggregate([
+            { $group: { _id: '$category', count: { $sum: 1 } } },
+            { $project: { _id: 0, category: "$_id", count: 1 } },
+        ]);
+        return res.status(200).json(createResponse(true, 200, "Categories fetched successfully", categories));
+    } catch (error) {
+        console.error(error.message);
+        return res.status(500).json(createResponse(false, 500, "Internal server error"));
+    }
 };
 
-export const featurePost = async (req, res) => {
-  const clerkUserId = req.auth.userId;
-  const postId = req.body.postId;
+/**
+ * Fetches the top news posts by category based on visit count.
+ * @param {Object} req - The Express request object containing category in params.
+ * @param {Object} res - The Express response object to send back the response.
+ * @returns {void}
+ */
+export const getTopPostsByCategory = async (req, res) => {
+    const { category } = req.params;
+    try {
+        const { page = 1, limit = 5 } = req.query;
+        const skip = (page - 1) * limit;
+        const totalPosts = await Post.countDocuments({ category, status: 'PUBLISHED' });
 
-  if (!clerkUserId) {
-    return res.status(401).json("Not authenticated!");
-  }
+        const topPosts = await Post.find({ category, status: 'PUBLISHED' })
+            .sort({ visitCount: -1 })
+            .skip(skip)
+            .limit(limit);
 
-  const role = req.auth.sessionClaims?.metadata?.role || "user";
+        const currentTotal = topPosts.length;
+        const pagination = paginate(totalPosts, currentTotal, page, limit, POSTS_URL + `/category/${category}/top`);
 
-  if (role !== "admin") {
-    return res.status(403).json("You cannot feature posts!");
-  }
+        if (pagination.error) {
+            return res.status(pagination.status).json(createResponse(
+            false,
+            pagination.status,
+            pagination.message,
+            { totalPages: pagination.totalPages }
+            ));
+        }
 
-  const post = await Post.findById(postId);
+        const response = {
+            ...pagination,
+            news: topPosts
+        };
 
-  if (!post) {
-    return res.status(404).json("Post not found!");
-  }
+        return res.status(200).json(createResponse(
+            true,
+            200,
+            `Top ${category} news fetched successfully`,
+            response
+        ));
+    }
+    catch (error) {
+        console.error(error.message);
+        return res.status(500).json(createResponse(
+            false,
+            500,
+            "Internal server error"
+        ));
+    }
+}
 
-  const isFeatured = post.isFeatured;
+/**
+ * 
+*/
+export const getRelatedPosts = async (req, res) => {
+    const { postId } = req.params;
+    
+    try {
+        const post = await Post.findById(postId);
+        if (!post) {
+            return res.status(404).json(createResponse(
+                false,
+                404,
+                "Post not found"
+            ));
+        }
 
-  const updatedPost = await Post.findByIdAndUpdate(
-    postId,
-    {
-      isFeatured: !isFeatured,
-    },
-    { new: true }
-  );
+        const relatedPosts = await Post.find({
+            _id: { $ne: postId },
+            category: post.category,
+            status: 'PUBLISHED'
+        }).limit(4).sort({ createdAt: -1 });
 
-  res.status(200).json(updatedPost);
+        return res.status(200).json(createResponse(
+            true,
+            200,
+            "Related posts fetched successfully",
+            relatedPosts
+        ));
+    }
+    catch (error) {
+        console.error(error.message);
+        return res.status(500).json(createResponse(
+            false,
+            500,
+            "Internal server error"
+        ));
+    }
+}
+
+
+export const getPostBySlug = async (req, res) => {
+    const { slug } = req.params;
+    try {
+        const post = await Post.findOneAndUpdate(
+            { slug },
+            { $inc: { visitCount: 1 } },
+            { new: true }
+        );
+
+        if (!post) {
+            return res.status(404).json(createResponse(
+                false,
+                404,
+                "Post not found"
+            ));
+        }
+
+        return res.status(200).json(createResponse(
+            true,
+            200,
+            "Post fetched successfully",
+            post
+        ));
+    }
+    catch (error) {
+        console.error(error.message);
+        return res.status(500).json(createResponse(
+            false,
+            500,
+            "Internal server error"
+        ));
+    }
+}
+
+
+/**
+ * Fetches dashboard news posts for authenticated users, depending on their role.
+ * @param {Object} req - The Express request object.
+ * @param {Object} res - The Express response object to send back the response.
+ * @returns {void}
+ */
+export const getDashboardNews = async (req, res) => {
+    const { id, role } = req.userInfo;
+    try {
+        const query = role === 'admin' ? {} : { writerId: new ObjectId(id) };
+        const news = await Post.find(query).sort({ createdAt: -1 });
+        return res.status(200).json(createResponse(true, 200, "Dashboard news fetched successfully", news));
+    } catch (error) {
+        console.error(error.message);
+        return res.status(500).json(createResponse(false, 500, "Internal server error"));
+    }
 };
 
-import dotenv from "dotenv";
-dotenv.config();
+/**
+ * Fetches a single news post by its ID for the dashboard.
+ * @param {Object} req - The Express request object containing news ID in params.
+ * @param {Object} res - The Express response object to send back the response.
+ * @returns {void}
+ */
+export const getDashboardSingleNews = async (req, res) => {
+    const { news_id } = req.params;
+    try {
+        const news = await Post.findById(news_id);
+        if (!news) {
+            return res.status(404).json(createResponse(false, 404, "News not found"));
+        }
+        return res.status(200).json(createResponse(true, 200, "Single news fetched successfully", news));
+    } catch (error) {
+        console.error(error.message);
+        return res.status(500).json(createResponse(false, 500, "Internal server error"));
+    }
+};
 
-const imagekit = new ImageKit({
-  urlEndpoint: process.env.IK_URL_ENDPOINT,
-  publicKey: process.env.IK_PUBLIC_KEY,
-  privateKey: process.env.IK_PRIVATE_KEY,
-});
+/**
+ * Fetches the most popular active news posts.
+ * @param {Object} req - The Express request object.
+ * @param {Object} res - The Express response object to send back the response.
+ * @returns {void}
+ */
+export const getPopularNews = async (req, res) => {
+    try {
+        const popularNews = await Post.find({ status: 'PUBLISHED' }).sort({ visitCount: -1 }).limit(4);
+        return res.status(200).json(createResponse(true, 200, "Popular news fetched successfully", popularNews));
+    } catch (error) {
+        console.error(error.message);
+        return res.status(500).json(createResponse(false, 500, "Internal server error"));
+    }
+};
 
-export const uploadAuth = async (req, res) => {
-  const result = imagekit.getAuthenticationParameters();
-  res.send(result);
+/**
+ * Fetches the latest active news posts.
+ * @param {Object} req - The Express request object.
+ * @param {Object} res - The Express response object to send back the response.
+ * @returns {void}
+ */
+export const getLatestNews = async (req, res) => {
+    try {
+        const news = await Post.find({ status: 'PUBLISHED' }).sort({ createdAt: -1 }).limit(6);
+        return res.status(200).json(createResponse(true, 200, "Latest news fetched successfully", news));
+    } catch (error) {
+        console.error(error.message);
+        return res.status(500).json(createResponse(false, 500, "Internal server error"));
+    }
+};
+
+/**
+ * Fetches a single news post by its slug.
+ * @param {Object} req - The Express request object containing the news slug in params.
+ * @param {Object} res - The Express response object to send back the response.
+ * @returns {void}
+ */
+export const getNews = async (req, res) => {
+    const { slug } = req.params;
+    try {
+        const news = await Post.findOneAndUpdate({ slug }, { $inc: { visitCount: 1 } }, { new: true });
+        const relatedNews = await Post.find({
+            slug: { $ne: slug },
+            category: news.category,
+            status: 'PUBLISHED'
+        }).limit(4).sort({ createdAt: -1 });
+
+        return res.status(200).json(createResponse(true, 200, "News fetched successfully", { news, relatedNews }));
+    } catch (error) {
+        console.error(error.message);
+        return res.status(500).json(createResponse(false, 500, "Internal server error"));
+    }
+};
+
+/**
+ * Fetches all news categorized by their category.
+ * @param {Object} req - The Express request object.
+ * @param {Object} res - The Express response object to send back the response.
+ * @returns {void}
+ */
+export const getAllNewsByCategory = async (req, res) => {
+    try {
+        const categoryNews = await Post.aggregate([
+            { $match: { status: 'PUBLISHED' } },
+            { $sort: { createdAt: -1 } },
+            {
+                $group: {
+                    _id: "$category",
+                    news: { $push: { _id: '$_id', title: '$title', slug: '$slug', image: '$image', description: '$description', category: '$category' } }
+                },
+            },
+            {
+                $project: {
+                    _id: 0,
+                    category: '$_id',
+                    news: { $slice: ['$news', 5] }
+                },
+            }
+        ]);
+
+        const news = categoryNews.reduce((acc, category) => {
+            acc[category.category] = category.news;
+            return acc;
+        }, {});
+
+        return res.status(200).json(createResponse(true, 200, "All news by category fetched successfully", news));
+    } catch (error) {
+        console.error(error.message);
+        return res.status(500).json(createResponse(false, 500, "Internal server error"));
+    }
 };

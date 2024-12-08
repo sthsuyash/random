@@ -1,68 +1,81 @@
-import express from "express";
-import connectDB from "./lib/connectDB.js";
-import userRouter from "./routes/user.route.js";
-import postRouter from "./routes/post.route.js";
-import commentRouter from "./routes/comment.route.js";
-import webhookRouter from "./routes/webhook.route.js";
-import { clerkMiddleware, requireAuth } from "@clerk/express";
+import path from "path";
 import cors from "cors";
-
 import dotenv from "dotenv";
+import express from "express";
+import cookieParser from "cookie-parser";
+
+import routes from "./routes/index.js";
+import { config } from "./config/index.js";
+import { connectDB } from "./db/connectDB.js";
+import { morganConfig } from "./logging/morganConfig.js";
+import { createResponse } from "./utils/responseModel.js";
+
 dotenv.config();
 
+const PORT = config.server.port; // Server port from config
+const NODE_ENV = config.server.nodeEnv; // Environment mode (development/production)
+let CLIENT_URL; // Client URL for CORS
+
 const app = express();
+const __dirname = path.resolve();
 
-// app.use(cors(process.env.CLIENT_URL));
-app.use(cors("*"));
-app.use(clerkMiddleware());
-app.use("/webhooks", webhookRouter);
+// in development, allow all origins, else allow only the client URL
+if (NODE_ENV === "development") {
+	CLIENT_URL = "*"; // This allows all origins
+} else {
+	CLIENT_URL = config.server.clientURL;
+}
+
+// Enable CORS for all origins
+app.use(cors({
+	origin: "http://localhost:5173",
+	credentials: true, // Allow credentials like cookies
+}));
+
 app.use(express.json());
+app.use(cookieParser());
+app.use(morganConfig);
+app.use("/api/v2/", routes);
 
-app.use(function (req, res, next) {
-  res.header("Access-Control-Allow-Origin", "*");
-  res.header(
-    "Access-Control-Allow-Headers",
-    "Origin, X-Requested-With, Content-Type, Accept"
-  );
-  next();
+// Production environment-specific handling
+if (NODE_ENV === "production") {
+	app.use(express.static(path.join(__dirname, "/frontend/dist")));
+
+	/**
+	 * Catch-all route handler for the production environment.
+	 * Returns the index.html file to support client-side routing (e.g., React Router).
+	 * @param {Object} req - The request object.
+	 * @param {Object} res - The response object.
+	 */
+	app.get("*", (req, res) => {
+		res.sendFile(path.resolve(__dirname, "frontend", "dist", "index.html"));
+	});
+}
+
+// 404 handler for unknown routes
+app.use((req, res, next) => {
+	const response = createResponse(
+		false,
+		404,
+		`Route ${req.originalUrl} not found`
+	);
+	res.status(404).json(response);
 });
 
-app.get("/test",(req,res)=>{
-  res.status(200).send("it works!")
-})
-
-app.get("/auth-state", (req, res) => {
-  const authState = req.auth;
-  res.json(authState);
+// Global error handler for other errors (e.g., server or internal errors)
+app.use((err, req, res, next) => {
+	console.error(err); // Log the error for debugging purposes
+	const response = createResponse(
+		false,
+		500,
+		"Internal server error",
+		null,
+		err.message
+	);
+	res.status(500).json(response);
 });
 
-app.get("/protect", (req, res) => {
-  const {userId} = req.auth;
-  if(!userId){
-    return res.status(401).json("not authenticated")
-  }
-  res.status(200).json("content")
-});
-
-app.get("/protect2", requireAuth(), (req, res) => {
-  res.status(200).json("content")
-});
-
-app.use("/users", userRouter);
-app.use("/posts", postRouter);
-app.use("/comments", commentRouter);
-
-app.use((error, req, res, next) => {
-  res.status(error.status || 500);
-
-  res.json({
-    message: error.message || "Something went wrong!",
-    status: error.status,
-    stack: error.stack,
-  });
-});
-
-app.listen(3000, () => {
-  connectDB();
-  console.log("Server is running!");
+app.listen(PORT, () => {
+	connectDB();
+	console.log(`Server is running on: http://localhost:${PORT}/api/v2`);
 });

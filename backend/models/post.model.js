@@ -1,46 +1,46 @@
-import { Schema } from "mongoose";
-import mongoose from "mongoose";
+import { model, Schema } from 'mongoose'
 
-const postSchema = new Schema(
-  {
-    user: {
-      type: Schema.Types.ObjectId,
-      ref: "User",
-      required: true,
-    },
-    img: {
-      type: String,
-    },
+const postSchema = new Schema({
     title: {
-      type: String,
-      required: true,
+        type: String,
+        required: true
     },
     slug: {
-      type: String,
-      required: true,
-      unique: true,
+        type: String,
+        required: true,
+        unique: true
     },
-    desc: {
-      type: String,
+    image: {
+        type: String
     },
     category: {
-      type: String,
-      default: "general",
+        type: String,
+        required: true
     },
-    content: {
-      type: String,
-      required: true,
+    description: {
+        type: String,
+        default: "",
+        required: true
     },
-    isFeatured: {
-      type: Boolean,
-      default: false,
+    status: {
+        type: String,
+        enum: ["DRAFT", "PUBLISHED"],
+        default: "PUBLISHED"
     },
-    visit: {
-      type: Number,
-      default: 0,
-    },
-  },
-  { timestamps: true }
-);
+    visitCount: {
+        type: Number,
+        default: 0
+    }
+}, { timestamps: true })
 
-export default mongoose.model("Post", postSchema);
+postSchema.index({
+    title: 'text',
+    category: 'text',
+    description: 'text'
+}, {
+    title: 5,
+    description: 4,
+    category: 2
+})
+
+export const Post = model('Post', postSchema)
